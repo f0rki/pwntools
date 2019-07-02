@@ -848,14 +848,22 @@ class process(tube):
         If ``/proc/$PID/maps`` for the process cannot be accessed, the output
         of ``ldd`` alone is used.  This may give inaccurate results if ASLR
         is enabled.
+
+        Examples:
+
+            >>> p = process('/usr/bin/bash')
+            >>> p.libs()
+            >>> assert "/usr/bin/bash" in p.libs()
+
         """
         with context.local(log_level='error'):
             ldd = process(['ldd', self.executable]).recvall()
 
-        maps = parse_ldd_output(ldd)
+        maps = parse_ldd_output(six.ensure_str(ldd))
 
         try:
             maps_raw = open('/proc/%d/maps' % self.pid).read()
+            maps_raw = six.ensure_str(maps_raw)
         except IOError:
             return maps
 
