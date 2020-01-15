@@ -509,11 +509,14 @@ class process(tube):
         # - Must be a list/tuple of strings
         # - Each string must not contain '\x00'
         #
-        if isinstance(argv, (bytes, six.text_type)):
+        if isinstance(argv, (six.text_type, six.binary_type)):
             argv = [argv]
 
-        if not all(isinstance(arg, (bytes, six.text_type)) for arg in argv):
-            self.error("argv must be strings: %r" % argv)
+        if not isinstance(argv, (list, tuple)):
+            self.error('argv must be a list or tuple: %r' % argv)
+
+        if not all(isinstance(arg, (six.text_type, six.binary_type)) for arg in argv):
+            self.error("argv must be strings or bytes: %r" % argv)
 
         # Create a duplicate so we can modify it
         argv = list(argv or [])

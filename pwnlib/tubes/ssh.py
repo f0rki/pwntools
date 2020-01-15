@@ -21,7 +21,6 @@ from pwnlib.log import Logger
 from pwnlib.log import getLogger
 from pwnlib.term import text
 from pwnlib.timeout import Timeout
-from pwnlib.tubes.process import process
 from pwnlib.tubes.sock import sock
 from pwnlib.util import hashes
 from pwnlib.util import misc
@@ -435,9 +434,18 @@ class ssh_connecter(sock):
                 self.exception(e.message)
                 raise
 
-            sockname = self.sock.get_transport().sock.getsockname()
-            self.lhost = sockname[0]
-            self.lport = sockname[1]
+            try:
+                # Iterate all layers of proxying to get to base-level Socket object
+                curr = self.sock.get_transport().sock
+                while getattr(curr, "get_transport", None):
+                    curr = curr.get_transport().sock
+
+                sockname = curr.getsockname()
+                self.lhost = sockname[0]
+                self.lport = sockname[1]
+            except Exception as e:
+                self.exception("Could not find base-level Socket object.")
+                raise e
 
             h.success()
 
@@ -547,7 +555,21 @@ class ssh(Timeout, Logger):
             ssh_agent: If :const:`True`, enable usage of keys via ssh-agent
 
         NOTE: The proxy_command and proxy_sock arguments is only available if a
-        fairly new version of paramiko is used."""
+        fairly new version of paramiko is used.
+
+        Example proxying:
+
+            >>> s1 = ssh(host='example.pwnme',
+            ...          user='travis',
+            ...          password='demopass')
+            >>> r1 = s1.remote('localhost', 22)
+            >>> s2 = ssh(host='example.pwnme',
+            ...          user='travis',
+            ...          password='demopass',
+            ...          proxy_sock=r1.sock)
+            >>> r2 = s2.remote('localhost', 22) # and so on...
+            >>> for x in r2, s2, r1, s1: x.close()
+        """
         super(ssh, self).__init__(*a, **kw)
 
         Logger.__init__(self)
@@ -631,7 +653,6 @@ class ssh(Timeout, Logger):
 
         with context.local(log_level='error'):
             def getppid():
-                import os
                 print(os.getppid())
             try:
                 self.pid = int(self.process('false', preexec_fn=getppid).recvall())
@@ -690,7 +711,7 @@ class ssh(Timeout, Logger):
         return self.run(shell, tty, timeout = timeout)
 
     def process(self, argv=None, executable=None, tty=True, cwd=None, env=None, timeout=Timeout.default, run=True,
-                stdin=0, stdout=1, stderr=2, preexec_fn=None, preexec_args=[], raw=True, aslr=None, setuid=None,
+                stdin=0, stdout=1, stderr=2, preexec_fn=None, preexec_args=(), raw=True, aslr=None, setuid=None,
                 shell=False):
         r"""
         Executes a process on the remote server, in the same fashion
@@ -774,7 +795,7 @@ class ssh(Timeout, Logger):
             >>> s.process(['LOLOLOL\x00', '/proc/self/cmdline'], executable='cat').recvall()
             b'LOLOLOL\x00/proc/self/cmdline\x00'
             >>> sh = s.process(executable='/bin/sh')
-            >>> sh.pid in pidof('sh') # doctest: +SKIP
+            >>> str(sh.pid).encode() in s.pidof('sh') # doctest: +SKIP
             True
             >>> s.process(['pwd'], cwd='/tmp').recvall()
             b'/tmp\n'
@@ -823,10 +844,16 @@ class ssh(Timeout, Logger):
         if not isinstance(argv, (list, tuple)):
             self.error('argv must be a list or tuple')
 
+        if not all(isinstance(arg, (six.text_type, six.binary_type)) for arg in argv):
+            self.error("argv must be strings or bytes: %r" % argv)
+
         if shell:
             if len(argv) != 1:
                 self.error('Cannot provide more than 1 argument if shell=True')
             argv = ['/bin/sh', '-c'] + argv
+
+        # Create a duplicate so we can modify it
+        argv = list(argv or [])
 
         # Python doesn't like when an arg in argv contains '\x00'
         # -> execve() arg 2 must contain only strings
@@ -860,12 +887,8 @@ class ssh(Timeout, Logger):
         # Validate, since failures on the remote side will suck.
         if not isinstance(executable, (six.text_type, six.binary_type)):
             self.error("executable / argv[0] must be a string: %r" % executable)
-        if not isinstance(argv, (list, tuple)):
-            self.error("argv must be a list or tuple: %r" % argv)
         if env is not None and not isinstance(env, dict) and env != os.environ:
             self.error("env must be a dict: %r" % env)
-        if not all(isinstance(s, (six.text_type, six.binary_type)) for s in argv):
-            self.error("argv must only contain strings: %r" % argv)
 
         # Allow passing in sys.stdin/stdout/stderr objects
         handles = {sys.stdin: 0, sys.stdout:1, sys.stderr:2}
@@ -1150,7 +1173,7 @@ from ctypes import *; libc = CDLL('libc.so.6'); print(libc.getenv(%r))
 
         try:
             return int(result) & context.mask
-        except:
+        except ValueError:
             self.exception("Could not look up environment variable %r" % variable)
 
 
@@ -1328,7 +1351,7 @@ from ctypes import *; libc = CDLL('libc.so.6'); print(libc.getenv(%r))
             self.error('Unable to find libraries for %r' % remote)
             return {}
 
-        return misc.parse_ldd_output(data)
+        return misc.parse_ldd_output(context._decode(data))
 
     def _get_fingerprint(self, remote):
         cmd = '(sha256 || sha256sum || openssl sha256) 2>/dev/null < '
@@ -1507,7 +1530,6 @@ from ctypes import *; libc = CDLL('libc.so.6'); print(libc.getenv(%r))
             with context.local(log_level='error'):
                 remote = self.system('readlink -f ' + sh_string(remote))
 
-        dirname  = os.path.dirname(remote)
         basename = os.path.basename(remote)
 
         local    = local or '.'
@@ -1553,6 +1575,7 @@ from ctypes import *; libc = CDLL('libc.so.6'); print(libc.getenv(%r))
             >>> print(open('/tmp/upload_bar').read())
             Hello, world
         """
+        data = context._encode(data)
         # If a relative path was provided, prepend the cwd
         if os.path.normpath(remote) == os.path.basename(remote):
             remote = os.path.join(self.cwd, remote)
@@ -1613,7 +1636,7 @@ from ctypes import *; libc = CDLL('libc.so.6'); print(libc.getenv(%r))
             self.error("%r is not a directory" % local)
 
         msg = "Uploading %r to %r" % (basename,remote)
-        with self.waitfor(msg) as w:
+        with self.waitfor(msg):
             # Generate a tarfile with everything inside of it
             local_tar  = tempfile.mktemp()
             with tarfile.open(local_tar, 'w:gz') as tar:
@@ -1700,7 +1723,7 @@ from ctypes import *; libc = CDLL('libc.so.6'); print(libc.getenv(%r))
 
         libs = self._libs_remote(remote)
 
-        remote = self.readlink('-f',remote).strip()
+        remote = context._decode(self.readlink('-f',remote).strip())
         libs[remote] = 0
 
         if directory == None:
@@ -1842,7 +1865,7 @@ from ctypes import *; libc = CDLL('libc.so.6'); print(libc.getenv(%r))
         return self.download_data(path)
 
     def _init_remote_platform_info(self):
-        """Fills _platform_info, e.g.:
+        r"""Fills _platform_info, e.g.:
 
         ::
 

@@ -21,7 +21,7 @@ import pwnlib
 from pwnlib import *
 from pwnlib.asm import *
 from pwnlib.context import Thread
-from pwnlib.context import context
+from pwnlib.context import context, LocalContext
 from pwnlib.dynelf import DynELF
 from pwnlib.encoders import *
 from pwnlib.elf.corefile import Core, Corefile, Coredump
@@ -29,6 +29,7 @@ from pwnlib.elf.elf import ELF, load
 from pwnlib.encoders import *
 from pwnlib.exception import PwnlibException
 from pwnlib.gdb import attach, debug, debug_assembly, debug_shellcode
+from pwnlib.filepointer import *
 from pwnlib.flag import *
 from pwnlib.fmtstr import FmtStr, fmtstr_payload
 from pwnlib.log import getLogger

@@ -704,12 +704,14 @@ class DynELF(object):
             "A hash table of Elf32_Word objects supports symbol table access", or see:
             https://docs.oracle.com/cd/E19504-01/802-6319/6ia12qkfo/index.html#chapter6-48031
 
-            struct Elf_Hash {
-                uint32_t nbucket;
-                uint32_t nchain;
-                uint32_t bucket[nbucket];
-                uint32_t chain[nchain];
-            }
+            .. code-block:: c
+
+                struct Elf_Hash {
+                    uint32_t nbucket;
+                    uint32_t nchain;
+                    uint32_t bucket[nbucket];
+                    uint32_t chain[nchain];
+                }
 
             You can force an ELF to use this type of symbol table by compiling
             with 'gcc -Wl,--hash-style=sysv'
@@ -855,7 +857,7 @@ class DynELF(object):
             if self.leak.compare(address + 0xC, "GNU\x00"):
                 return enhex(b''.join(self.leak.raw(address + 0x10, 20)))
             else:
-                self.status("Magic did not match")
+                self.status("Build ID not found at offset %#x" % offset)
                 pass
 
     def _make_absolute_ptr(self, ptr_or_offset):
